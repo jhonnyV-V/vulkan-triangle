@@ -24,7 +24,7 @@ debugCallback :: proc "c" (
 	severity: vulkan.DebugUtilsMessageSeverityFlagsEXT,
 	type: vulkan.DebugUtilsMessageTypeFlagsEXT,
 	callbackData: ^vulkan.DebugUtilsMessengerCallbackDataEXT,
-	ptr: rawptr
+	ptr: rawptr,
 ) -> b32 {
 	context = runtime.default_context()
 	fmt.printf("validation layer type %s\n msg: %\n", type, callbackData.pMessage)
@@ -52,18 +52,18 @@ HEIGHT: c.int : 600
 
 validationLayers := [1]cstring{"VK_LAYER_KHRONOS_validation"}
 enableValidationLayers :: ODIN_DEBUG
-
+physicalDevice: vulkan.PhysicalDevice
 
 setupDebugMessenger :: proc() {
 	if !enableValidationLayers {
 		return
 	}
-	severity: vulkan.DebugUtilsMessageSeverityFlagsEXT = {.VERBOSE , .WARNING , .ERROR}
-	messageType: vulkan.DebugUtilsMessageTypeFlagsEXT = {.GENERAL , .PERFORMANCE , .VALIDATION}
+	severity: vulkan.DebugUtilsMessageSeverityFlagsEXT = {.VERBOSE, .WARNING, .ERROR}
+	messageType: vulkan.DebugUtilsMessageTypeFlagsEXT = {.GENERAL, .PERFORMANCE, .VALIDATION}
 	debugInfo: vulkan.DebugUtilsMessengerCreateInfoEXT = {
 		messageSeverity = severity,
-		messageType = messageType,
-		pfnUserCallback = debugCallback
+		messageType     = messageType,
+		pfnUserCallback = debugCallback,
 	}
 
 	result := vulkan.CreateDebugUtilsMessengerEXT(vkInstance, &debugInfo, nil, &vkDebugMessenger)
@@ -152,6 +152,50 @@ createVkInstance :: proc() {
 	// }
 }
 
+pickPhysycalDevice :: proc() {
+	count: u32 = 0
+
+	vulkan.EnumeratePhysicalDevices(vkInstance, &count, nil)
+	if count == 0 {
+		fmt.panicf("vulkan: no GPU found")
+	}
+
+	deviceList := make([]vulkan.PhysicalDevice, count, context.temp_allocator)
+	vulkan.EnumeratePhysicalDevices(vkInstance, &count, raw_data(deviceList))
+
+	bestDeviceScore := -1
+	for device in deviceList {
+		score := 0
+		props: vulkan.PhysicalDeviceProperties
+
+		vulkan.GetPhysicalDeviceProperties(device, &props)
+		name := byte_arr_str(&props.deviceName)
+
+		features: vulkan.PhysicalDeviceFeatures
+		vulkan.GetPhysicalDeviceFeatures(device, &features)
+
+		features.geometryShader or_continue
+
+		switch props.deviceType {
+		case .DISCRETE_GPU:
+			score += 300_000
+
+		case .INTEGRATED_GPU:
+			score += 200_000
+
+		case .VIRTUAL_GPU:
+			score += 100_000
+
+		case .OTHER, .CPU:
+		}
+
+		score += int(props.limits.maxImageDimension2D)
+
+		if score > bestDeviceScore {
+			physicalDevice = device
+		}
+	}
+}
 
 main :: proc() {
 	glfw.SetErrorCallback(error_callback)
@@ -179,6 +223,7 @@ main :: proc() {
 	createVkInstance()
 	defer vulkan.DestroyInstance(vkInstance, nil)
 	setupDebugMessenger()
+	pickPhysycalDevice()
 
 	glfw.SetKeyCallback(window, key_callback)
 	// glfw.MakeContextCurrent(window)
@@ -189,4 +234,8 @@ main :: proc() {
 		// glfw.SwapBuffers(window)
 	}
 
+}
+
+byte_arr_str :: proc(arr: ^[$N]byte) -> string {
+	return strings.truncate_to_byte(string(arr[:]), 0)
 }
